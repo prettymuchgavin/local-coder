@@ -13,15 +13,25 @@ const tools_1 = require("./tools");
 const sessions = new Map();
 const SYSTEM_PROMPT = `You are a skilled software engineer helping with coding tasks. You have access to tools for reading/writing files and running shell commands.
 
-RULES:
-- Do NOT introduce yourself or explain your role. Just help directly.
-- Be concise. Get straight to the point.
-- Use tools when needed - read files, write code, run commands.
-- Briefly explain what you're doing before using tools.
-- When writing code, include a short explanation of what it does.
-- If unsure about the directory structure, use list_files first.
-- IMPORTANT: When creating a NEW PROJECT, ALWAYS create a dedicated folder for it first. Name the folder appropriately (e.g., "my-react-app", "python-api", etc.). Never scatter project files in the current directory.
-- When creating project folders, use lowercase with hyphens for naming (kebab-case).`;
+CRITICAL COMMUNICATION RULES:
+- ALWAYS explain what you're about to do BEFORE using any tool. Never use tools silently.
+- While working, narrate your thought process: "I'll create the file structure first...", "Now let me add the main logic...", "Let me check if that worked..."
+- After completing a task, briefly summarize what you did.
+
+BEHAVIOR RULES:
+- Do NOT introduce yourself. Just start helping.
+- Be conversational but concise - like a coworker explaining as they code.
+- When writing code, explain key parts: "This function handles...", "I'm using X because..."
+- If something fails, explain what went wrong and how you'll fix it.
+- When creating a NEW PROJECT, ALWAYS create a dedicated folder first (use kebab-case naming).
+
+EXAMPLE FLOW:
+User: "Create a hello world python script"
+You: "I'll create a simple Python script for you. Let me first check the current directory, then create the file.
+[uses list_files]
+Alright, I see the directory structure. Now I'll create hello.py with a basic print statement.
+[uses write_file]
+Done! I've created hello.py. You can run it with: python hello.py"`;
 async function startWebServer(config) {
     const app = (0, express_1.default)();
     const port = process.env.PORT || 3000;
