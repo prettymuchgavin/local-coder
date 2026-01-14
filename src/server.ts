@@ -47,42 +47,36 @@ You are an AI-powered prompt generator, designed to improve and expand basic pro
 
 Present the enhanced prompt as a well-structured, detailed guide. Only provide the output prompt without additional comments.`;
 
-const EXECUTING_SYSTEM_PROMPT = `You are a skilled software engineer with access to these tools:
-- list_files: List files in a directory
-- read_file: Read file contents  
-- write_file: Create or overwrite files
-- run_shell_command: Execute shell commands
+const EXECUTING_SYSTEM_PROMPT = `You are a skilled software engineer. You have function calling capabilities to interact with the file system.
 
-You will receive a detailed prompt describing what to build. Your job is to ACTUALLY BUILD IT using your tools.
+Your available functions are: list_files, read_file, write_file, run_shell_command
 
-CRITICAL: You MUST use your tools to create real files. Do not just describe what to do - DO IT.
+IMPORTANT: Do NOT write out tool calls as text. The system will automatically detect when you want to use a tool. Just describe what you're doing and the tools will be invoked for you.
 
 WORKFLOW:
-1. First, use list_files to see the current directory
-2. Create any needed folders with run_shell_command (e.g., "mkdir my-project")
-3. Use write_file to create each file with real code
-4. Use run_shell_command for any setup (npm init, pip install, etc.)
+1. First, check the current directory
+2. Create any needed folders
+3. Create files with real code
+4. Run any setup commands
 5. Summarize what you created
 
 RULES:
-- Narrate as you work: "Creating the folder...", "Writing the main file..."
-- ALWAYS use write_file to create files - never just show code blocks
+- Narrate as you work: "I'll create the folder first...", "Now writing the main file..."
 - Create project folders using kebab-case naming
 - If something fails, explain and retry`;
 
-const SINGLE_MODEL_PROMPT = `You are a skilled software engineer helping with coding tasks. You have access to tools for reading/writing files and running shell commands.
+const SINGLE_MODEL_PROMPT = `You are a skilled software engineer. You have function calling capabilities to interact with the file system.
 
-CRITICAL COMMUNICATION RULES:
-- ALWAYS explain what you're about to do BEFORE using any tool. Never use tools silently.
-- While working, narrate your thought process: "I'll create the file structure first...", "Now let me add the main logic..."
-- After completing a task, briefly summarize what you did.
+Your available functions are: list_files, read_file, write_file, run_shell_command
 
-BEHAVIOR RULES:
-- Do NOT introduce yourself. Just start helping.
-- Be conversational but concise - like a coworker explaining as they code.
-- When writing code, explain key parts: "This function handles...", "I'm using X because..."
-- If something fails, explain what went wrong and how you'll fix it.
-- When creating a NEW PROJECT, ALWAYS create a dedicated folder first (use kebab-case naming).`;
+IMPORTANT: Do NOT write out tool calls as text or JSON. The system handles tool invocation automatically. Just describe what you want to do and use the functions naturally.
+
+RULES:
+- Explain what you're doing as you work
+- Be conversational but concise
+- When creating a NEW PROJECT, create a dedicated folder first (use kebab-case naming)
+- If something fails, explain and fix it`;
+
 
 export async function startWebServer(config: Config) {
     const app = express();
@@ -92,7 +86,7 @@ export async function startWebServer(config: Config) {
     app.use(express.json());
     app.use(express.static(path.join(__dirname, '../public')));
 
-    const client = createClient(config);
+    let client = createClient(config);
 
     // Get available models
     app.get('/api/models', async (req, res) => {
@@ -138,6 +132,34 @@ export async function startWebServer(config: Config) {
         res.json({ success: true, config: { dualMode: config.dualMode, thinkingModel: config.thinkingModel, executingModel: config.executingModel } });
     });
 
+    // Update API key and base URL
+    app.post('/api/config/api', (req, res) => {
+        const { apiKey, baseURL } = req.body;
+        let clientUpdated = false;
+
+        if (apiKey !== undefined) {
+            config.apiKey = apiKey || 'lm-studio';
+            clientUpdated = true;
+        }
+        if (baseURL) {
+            config.baseURL = baseURL;
+            clientUpdated = true;
+        }
+
+        // Recreate client with new config
+        if (clientUpdated) {
+            client = createClient(config);
+        }
+
+        res.json({
+            success: true,
+            config: {
+                baseURL: config.baseURL,
+                hasApiKey: config.apiKey !== 'lm-studio'
+            }
+        });
+    });
+
     // Chat endpoint with streaming
     app.post('/api/chat', async (req, res) => {
         const { message, sessionId = 'default', autoApprove = true, dualMode } = req.body;
@@ -161,8 +183,16 @@ export async function startWebServer(config: Config) {
         res.setHeader('Connection', 'keep-alive');
 
         const sendEvent = (type: string, data: any) => {
-            res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+            if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+            }
         };
+
+        // Handle client disconnect
+        let clientDisconnected = false;
+        req.on('close', () => {
+            clientDisconnected = true;
+        });
 
         try {
             if (useDualMode) {
@@ -175,12 +205,18 @@ export async function startWebServer(config: Config) {
                 session.history.push({ role: 'user', content: message });
                 await processSingleModeChat(client, config, session.history, sendEvent, autoApprove);
             }
-            sendEvent('done', {});
+            if (!clientDisconnected) {
+                sendEvent('done', {});
+            }
         } catch (error: any) {
-            sendEvent('error', { message: error.message });
+            if (!clientDisconnected) {
+                sendEvent('error', { message: error.message || 'Connection lost' });
+            }
         }
 
-        res.end();
+        if (!res.writableEnded) {
+            res.end();
+        }
     });
 
     // Clear session
@@ -295,6 +331,14 @@ async function processSingleModeChat(
             }
         }
 
+        // Check if model output tool calls as text (fallback for models without native function calling)
+        if (toolCalls.length === 0 && fullContent) {
+            const parsedTools = parseTextToolCalls(fullContent);
+            if (parsedTools.length > 0) {
+                toolCalls = parsedTools;
+            }
+        }
+
         const assistantMessage: ChatMessage = { role: 'assistant', content: fullContent || null };
         if (toolCalls.length > 0) (assistantMessage as any).tool_calls = toolCalls;
         history.push(assistantMessage);
@@ -356,6 +400,14 @@ async function processExecutingChat(
             }
         }
 
+        // Check if model output tool calls as text (fallback for models without native function calling)
+        if (toolCalls.length === 0 && fullContent) {
+            const parsedTools = parseTextToolCalls(fullContent);
+            if (parsedTools.length > 0) {
+                toolCalls = parsedTools;
+            }
+        }
+
         const assistantMessage: ChatMessage = { role: 'assistant', content: fullContent || null };
         if (toolCalls.length > 0) (assistantMessage as any).tool_calls = toolCalls;
         history.push(assistantMessage);
@@ -397,10 +449,64 @@ async function executeToolAndSendEvents(
         else if (fnName === 'run_shell_command') result = await runShellCommand(args.command);
         else result = 'Error: Unknown tool function';
 
-        sendEvent('tool_result', { name: fnName, result: result.substring(0, 1000) });
+        // Send truncated result for display (5000 chars), but keep full result for AI
+        const displayResult = result.length > 5000
+            ? result.substring(0, 5000) + '\n... (truncated)'
+            : result;
+        sendEvent('tool_result', { name: fnName, result: displayResult });
         history.push({ role: 'tool', tool_call_id: toolCall.id, content: result });
     } catch (err: any) {
         sendEvent('tool_error', { name: fnName, error: err.message });
         history.push({ role: 'tool', tool_call_id: toolCall.id, content: `Error: ${err.message}` });
     }
+}
+
+// Parse tool calls from text output (for models that don't support native function calling)
+function parseTextToolCalls(content: string): StreamedToolCall[] {
+    const toolCalls: StreamedToolCall[] = [];
+
+    // Pattern 1: ```tool_request\n{...}\n``` or ```json\n{"name": "...", ...}\n```
+    const codeBlockRegex = /```(?:tool_request|json)?\s*\n?\{[^`]*"name"\s*:\s*"([^"]+)"[^`]*"arguments"\s*:\s*(\{[^`]*\})/gi;
+
+    // Pattern 2: {"name": "tool_name", "arguments": {...}} directly in text
+    const jsonRegex = /\{"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\}/g;
+
+    let match;
+    let id = 0;
+
+    // Try code block pattern first
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+        try {
+            const name = match[1];
+            const args = match[2];
+            JSON.parse(args); // Validate JSON
+            toolCalls.push({
+                id: `text-tool-${id++}`,
+                type: 'function',
+                function: { name, arguments: args }
+            });
+        } catch (e) {
+            // Invalid JSON, skip
+        }
+    }
+
+    // If no code blocks found, try direct JSON pattern
+    if (toolCalls.length === 0) {
+        while ((match = jsonRegex.exec(content)) !== null) {
+            try {
+                const name = match[1];
+                const args = match[2];
+                JSON.parse(args); // Validate JSON
+                toolCalls.push({
+                    id: `text-tool-${id++}`,
+                    type: 'function',
+                    function: { name, arguments: args }
+                });
+            } catch (e) {
+                // Invalid JSON, skip
+            }
+        }
+    }
+
+    return toolCalls;
 }

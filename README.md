@@ -85,7 +85,39 @@ LOCAL_LLM_BASE_URL=http://localhost:1234/v1
 
 # Specify a model name (skips interactive selection)
 LOCAL_LLM_MODEL=your-model-name
+
+# API Key for cloud providers (optional)
+OPENAI_API_KEY=sk-...
+# Or use a custom key name
+LOCAL_LLM_API_KEY=your-api-key
 ```
+
+### API Key Support
+
+Local Coder supports connecting to cloud AI providers in addition to local LM Studio:
+
+**Via Environment Variables:**
+```bash
+# OpenAI
+export OPENAI_API_KEY=sk-...
+export LOCAL_LLM_BASE_URL=https://api.openai.com/v1
+
+# Any OpenAI-compatible provider
+export LOCAL_LLM_API_KEY=your-key
+export LOCAL_LLM_BASE_URL=https://api.yourprovider.com/v1
+```
+
+**Via Web GUI:**
+1. Click the ⚙️ gear icon in the header
+2. Enter your API key and base URL
+3. Click "Save"
+
+**Common Base URLs:**
+| Provider | Base URL |
+|----------|----------|
+| LM Studio (local) | `http://localhost:1234/v1` |
+| OpenAI | `https://api.openai.com/v1` |
+| OpenRouter | `https://openrouter.ai/api/v1` |
 
 ### Config File
 

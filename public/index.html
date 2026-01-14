@@ -10,6 +10,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
     rel="stylesheet">
+
   <style>
     :root {
       --bg-primary: #0d1117;
@@ -131,6 +132,76 @@
 
     .btn:hover {
       background: var(--border-color);
+    }
+
+    .settings-toggle {
+      cursor: pointer;
+      padding: 0.5rem;
+      font-size: 1.25rem;
+      opacity: 0.7;
+      transition: opacity 0.2s;
+    }
+
+    .settings-toggle:hover {
+      opacity: 1;
+    }
+
+    .settings-toggle.active {
+      opacity: 1;
+    }
+
+    .settings-panel {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 2rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+      min-width: 300px;
+      z-index: 100;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+
+    .settings-panel.visible {
+      display: block;
+    }
+
+    .settings-row {
+      margin-bottom: 0.75rem;
+    }
+
+    .settings-row label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .settings-row input {
+      width: 100%;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 0.5rem;
+      border-radius: 4px;
+      font-size: 0.875rem;
+    }
+
+    .settings-row input:focus {
+      outline: none;
+      border-color: var(--accent-cyan);
+    }
+
+    .settings-save {
+      width: 100%;
+      justify-content: center;
+      margin-top: 0.5rem;
+    }
+
+    .header {
+      position: relative;
     }
 
     .btn-primary {
@@ -359,6 +430,26 @@
       color: var(--text-secondary);
       border-bottom: 1px solid var(--border-color);
       background: var(--bg-primary);
+    }
+
+    .code-preview {
+      background: #1a1a2e;
+      border-bottom: 1px solid var(--border-color);
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .code-preview pre {
+      margin: 0;
+      padding: 1rem;
+    }
+
+    .code-preview code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      color: #e0e0e0;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .tool-result {
@@ -735,9 +826,25 @@
         </select>
       </div>
 
+      <div class="settings-toggle" id="settings-toggle" title="API Settings">
+        ⚙️
+      </div>
+
       <button class="btn" id="clear-btn" title="Clear conversation">
         🗑️ Clear
       </button>
+    </div>
+
+    <div class="settings-panel" id="settings-panel">
+      <div class="settings-row">
+        <label>API Key (optional):</label>
+        <input type="password" id="api-key-input" placeholder="Leave empty for LM Studio">
+      </div>
+      <div class="settings-row">
+        <label>Base URL:</label>
+        <input type="text" id="base-url-input" placeholder="http://localhost:1234/v1">
+      </div>
+      <button class="btn settings-save" id="save-api-settings">Save</button>
     </div>
   </header>
 
@@ -941,13 +1048,66 @@
         updateModelInfo();
       });
 
+      // Settings panel toggle
+      const settingsToggle = document.getElementById('settings-toggle');
+      const settingsPanel = document.getElementById('settings-panel');
+      const apiKeyInput = document.getElementById('api-key-input');
+      const baseUrlInput = document.getElementById('base-url-input');
+      const saveApiSettings = document.getElementById('save-api-settings');
+
+      settingsToggle.addEventListener('click', () => {
+        settingsToggle.classList.toggle('active');
+        settingsPanel.classList.toggle('visible');
+      });
+
+      // Close settings when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!settingsPanel.contains(e.target) && !settingsToggle.contains(e.target)) {
+          settingsPanel.classList.remove('visible');
+          settingsToggle.classList.remove('active');
+        }
+      });
+
+      saveApiSettings.addEventListener('click', async () => {
+        const apiKey = apiKeyInput.value.trim();
+        const baseURL = baseUrlInput.value.trim();
+
+        await fetch('/api/config/api', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey, baseURL: baseURL || undefined })
+        });
+
+        // Reload models with new config
+        await loadModels();
+        settingsPanel.classList.remove('visible');
+        settingsToggle.classList.remove('active');
+
+        // Show success feedback
+        saveApiSettings.textContent = '✓ Saved!';
+        setTimeout(() => { saveApiSettings.textContent = 'Save'; }, 1500);
+      });
+
       clearBtn.addEventListener('click', async () => {
         await fetch('/api/session/clear', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({})
         });
-        chatContainer.innerHTML = welcome.outerHTML;
+        // Recreate welcome element properly
+        chatContainer.innerHTML = `
+          <div class="welcome" id="welcome">
+            <div class="welcome-icon">✨</div>
+            <h2>Welcome to Local Coder</h2>
+            <p>Your AI-powered coding assistant running locally. Ask me to write code, create projects, or help debug issues.</p>
+            <div class="welcome-hints">
+              <button class="welcome-hint" data-hint="Create a simple Python Flask API">Create Flask API</button>
+              <button class="welcome-hint" data-hint="List files in the current directory">List files</button>
+              <button class="welcome-hint" data-hint="Create a React component for a todo list">React Component</button>
+              <button class="welcome-hint" data-hint="Help me debug my code">Debug help</button>
+            </div>
+          </div>
+        `;
         setupHintButtons();
       });
 
@@ -1083,19 +1243,42 @@
           toolEl.className = 'tool-call';
           toolEl.id = `tool-${data.name}-${Date.now()}`;
           const argsSummary = getArgsSummary(data.name, data.args);
-          toolEl.innerHTML = `
-            <div class="tool-header" onclick="toggleToolCall(this.parentElement)">
-              <span class="tool-toggle">▼</span>
-              <span class="tool-icon">🔧</span>
-              <span class="tool-name">${data.name}</span>
-              <span class="tool-summary">${argsSummary}</span>
-              <span class="tool-status running">Working</span>
-            </div>
-            <div class="tool-body">
-              <div class="tool-args">${JSON.stringify(data.args, null, 2)}</div>
-              <div class="tool-result">Executing...</div>
-            </div>
-          `;
+
+          // Special handling for write_file - show code in collapsible box
+          if (data.name === 'write_file' && data.args?.content) {
+            const filePath = data.args.file_path || 'file';
+            const fileExt = filePath.split('.').pop() || 'txt';
+            const escapedContent = escapeHtml(data.args.content);
+
+            toolEl.innerHTML = `
+              <div class="tool-header" onclick="toggleToolCall(this.parentElement)">
+                <span class="tool-toggle">▼</span>
+                <span class="tool-icon">📝</span>
+                <span class="tool-name">Creating: ${filePath}</span>
+                <span class="tool-status running">Writing...</span>
+              </div>
+              <div class="tool-body">
+                <div class="code-preview">
+                  <pre><code class="language-${fileExt}">${escapedContent}</code></pre>
+                </div>
+                <div class="tool-result">Writing file...</div>
+              </div>
+            `;
+          } else {
+            toolEl.innerHTML = `
+              <div class="tool-header" onclick="toggleToolCall(this.parentElement)">
+                <span class="tool-toggle">▼</span>
+                <span class="tool-icon">🔧</span>
+                <span class="tool-name">${data.name}</span>
+                <span class="tool-summary">${argsSummary}</span>
+                <span class="tool-status running">Working</span>
+              </div>
+              <div class="tool-body">
+                <div class="tool-args">${JSON.stringify(data.args, null, 2)}</div>
+                <div class="tool-result">Executing...</div>
+              </div>
+            `;
+          }
           assistantMsg.appendChild(toolEl);
           break;
 

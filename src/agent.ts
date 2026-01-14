@@ -65,42 +65,35 @@ Present the enhanced prompt as a well-structured, detailed guide that an AI can 
 
 Only provide the output prompt. Do not add your own comments before the prompt first.`;
 
-const EXECUTING_SYSTEM_PROMPT = `You are a skilled software engineer with access to these tools:
-- list_files: List files in a directory
-- read_file: Read file contents  
-- write_file: Create or overwrite files
-- run_shell_command: Execute shell commands
+const EXECUTING_SYSTEM_PROMPT = `You are a skilled software engineer. You have function calling capabilities to interact with the file system.
 
-You will receive a detailed prompt describing what to build. Your job is to ACTUALLY BUILD IT using your tools.
+Your available functions are: list_files, read_file, write_file, run_shell_command
 
-CRITICAL: You MUST use your tools to create real files. Do not just describe what to do - DO IT.
+IMPORTANT: Do NOT write out tool calls as text. The system will automatically detect when you want to use a tool. Just describe what you're doing and the tools will be invoked for you.
 
 WORKFLOW:
-1. First, use list_files to see the current directory
-2. Create any needed folders with run_shell_command (e.g., "mkdir my-project")
-3. Use write_file to create each file with real code
-4. Use run_shell_command for any setup (npm init, pip install, etc.)
+1. First, check the current directory
+2. Create any needed folders
+3. Create files with real code
+4. Run any setup commands
 5. Summarize what you created
 
 RULES:
-- Narrate as you work: "Creating the folder...", "Writing the main file..."
-- ALWAYS use write_file to create files - never just show code blocks
+- Narrate as you work: "I'll create the folder first...", "Now writing the main file..."
 - Create project folders using kebab-case naming
 - If something fails, explain and retry`;
 
-const SINGLE_MODEL_SYSTEM_PROMPT = `You are a skilled software engineer helping with coding tasks. You have access to tools for reading/writing files and running shell commands.
+const SINGLE_MODEL_SYSTEM_PROMPT = `You are a skilled software engineer. You have function calling capabilities to interact with the file system.
 
-CRITICAL COMMUNICATION RULES:
-- ALWAYS explain what you're about to do BEFORE using any tool. Never use tools silently.
-- While working, narrate your thought process: "I'll create the file structure first...", "Now let me add the main logic...", "Let me check if that worked..."
-- After completing a task, briefly summarize what you did.
+Your available functions are: list_files, read_file, write_file, run_shell_command
 
-BEHAVIOR RULES:
-- Do NOT introduce yourself. Just start helping.
-- Be conversational but concise - like a coworker explaining as they code.
-- When writing code, explain key parts: "This function handles...", "I'm using X because..."
-- If something fails, explain what went wrong and how you'll fix it.
-- When creating a NEW PROJECT, ALWAYS create a dedicated folder first (use kebab-case naming).`;
+IMPORTANT: Do NOT write out tool calls as text or JSON. The system handles tool invocation automatically. Just describe what you want to do and use the functions naturally.
+
+RULES:
+- Explain what you're doing as you work
+- Be conversational but concise
+- When creating a NEW PROJECT, create a dedicated folder first (use kebab-case naming)
+- If something fails, explain and fix it`;
 
 function printDivider() {
   console.log(chalk.dim('─'.repeat(65)));
@@ -145,8 +138,13 @@ export async function runAgent(config: Config) {
   printDivider();
   console.log('');
 
-  // Initialize history based on mode
-  const history: ChatMessage[] = [];
+  // Initialize history with system prompt once
+  const history: ChatMessage[] = [
+    { role: 'system', content: SINGLE_MODEL_SYSTEM_PROMPT }
+  ];
+
+  // Dual mode maintains its own persistent history
+  const dualModeHistory: ChatMessage[] = [];
 
   while (true) {
     const userMessage = await input({
@@ -169,13 +167,11 @@ export async function runAgent(config: Config) {
     }
 
     if (config.dualMode) {
-      await processDualModelTurn(client, config, userMessage);
+      await processDualModelTurn(client, config, userMessage, dualModeHistory);
     } else {
-      history.push({ role: 'system', content: SINGLE_MODEL_SYSTEM_PROMPT });
+      // Single model: add user message to persistent history
       history.push({ role: 'user', content: userMessage });
       await processSingleModelTurn(client, config, history);
-      // Clear system prompt for next turn
-      history.shift();
     }
   }
 }
@@ -189,8 +185,8 @@ interface StreamedToolCall {
   };
 }
 
-// Dual-model processing
-async function processDualModelTurn(client: OpenAI, config: Config, userMessage: string) {
+// Dual-model processing with persistent history
+async function processDualModelTurn(client: OpenAI, config: Config, userMessage: string, dualModeHistory: ChatMessage[]) {
   // Phase 1: Enhancing the prompt
   console.log('');
   console.log(chalk.magenta.bold('  ┌─ ✨ ENHANCING PROMPT ──────────────────────────────────────┐'));
@@ -271,18 +267,20 @@ async function processDualModelTurn(client: OpenAI, config: Config, userMessage:
     return;
   }
 
-  // Phase 2: Executing
+  // Phase 2: Executing with persistent history
   console.log('');
   console.log(chalk.cyan.bold('  ┌─ ⚡ EXECUTING ────────────────────────────────────────────┐'));
   console.log(chalk.cyan('  │'));
 
-  const executingHistory: ChatMessage[] = [
-    { role: 'system', content: EXECUTING_SYSTEM_PROMPT },
-    { role: 'user', content: enhancedPrompt }
-  ];
+  // Initialize history with system prompt if empty
+  if (dualModeHistory.length === 0) {
+    dualModeHistory.push({ role: 'system', content: EXECUTING_SYSTEM_PROMPT });
+  }
 
+  // Add the enhanced prompt as user message
+  dualModeHistory.push({ role: 'user', content: enhancedPrompt });
 
-  await processExecutingPhase(client, config, executingHistory);
+  await processExecutingPhase(client, config, dualModeHistory);
 
   console.log(chalk.cyan('  │'));
   console.log(chalk.cyan('  └────────────────────────────────────────────────────────────┘'));
@@ -294,7 +292,7 @@ async function processSingleModelTurn(client: OpenAI, config: Config, history: C
 
   while (!finishedTurn) {
     console.log('');
-    console.log(chalk.bold.magenta(' AI ') + chalk.magenta('┃ '));
+    process.stdout.write(chalk.bold.magenta(' AI ') + chalk.magenta('┃ '));
 
     try {
       const stream = await client.chat.completions.create({
@@ -308,14 +306,27 @@ async function processSingleModelTurn(client: OpenAI, config: Config, history: C
       let fullContent = '';
       let toolCalls: StreamedToolCall[] = [];
       let currentToolCallIndex = -1;
+      let atLineStart = false; // First line already has prefix
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
         if (delta.content) {
-          const formatted = delta.content.replace(/\n/g, '\n' + chalk.magenta('    ┃ '));
-          process.stdout.write(formatted);
+          // Print prefix only at line start
+          const lines = delta.content.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (atLineStart && lines[i]) {
+              process.stdout.write(chalk.magenta('    ┃ '));
+            }
+            process.stdout.write(lines[i]);
+            if (i < lines.length - 1) {
+              process.stdout.write('\n');
+              atLineStart = true;
+            } else {
+              atLineStart = lines[i] === '';
+            }
+          }
           fullContent += delta.content;
         }
 
@@ -339,7 +350,15 @@ async function processSingleModelTurn(client: OpenAI, config: Config, history: C
         }
       }
 
-      if (fullContent) console.log('');
+      if (fullContent && !atLineStart) console.log('');
+
+      // Check if model output tool calls as text (fallback for models without native function calling)
+      if (toolCalls.length === 0 && fullContent) {
+        const parsedTools = parseTextToolCalls(fullContent);
+        if (parsedTools.length > 0) {
+          toolCalls = parsedTools;
+        }
+      }
 
       const assistantMessage: any = { role: 'assistant', content: fullContent || null };
       if (toolCalls.length > 0) assistantMessage.tool_calls = toolCalls;
@@ -377,14 +396,27 @@ async function processExecutingPhase(client: OpenAI, config: Config, history: Ch
       let fullContent = '';
       let toolCalls: StreamedToolCall[] = [];
       let currentToolCallIndex = -1;
+      let atLineStart = true;
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
         if (delta.content) {
-          const formatted = delta.content.replace(/\n/g, '\n' + chalk.cyan('  │ '));
-          process.stdout.write(chalk.cyan('  │ ') + formatted);
+          // Print prefix only at line start
+          const lines = delta.content.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (atLineStart && lines[i]) {
+              process.stdout.write(chalk.cyan('  │ '));
+            }
+            process.stdout.write(lines[i]);
+            if (i < lines.length - 1) {
+              process.stdout.write('\n');
+              atLineStart = true;
+            } else {
+              atLineStart = lines[i] === '';
+            }
+          }
           fullContent += delta.content;
         }
 
@@ -408,7 +440,15 @@ async function processExecutingPhase(client: OpenAI, config: Config, history: Ch
         }
       }
 
-      if (fullContent) console.log('');
+      if (fullContent && !atLineStart) console.log('');
+
+      // Check if model output tool calls as text (fallback for models without native function calling)
+      if (toolCalls.length === 0 && fullContent) {
+        const parsedTools = parseTextToolCalls(fullContent);
+        if (parsedTools.length > 0) {
+          toolCalls = parsedTools;
+        }
+      }
 
       const assistantMessage: any = { role: 'assistant', content: fullContent || null };
       if (toolCalls.length > 0) assistantMessage.tool_calls = toolCalls;
@@ -427,6 +467,56 @@ async function processExecutingPhase(client: OpenAI, config: Config, history: Ch
       finishedTurn = true;
     }
   }
+}
+
+// Parse tool calls from text output (for models that don't support native function calling)
+function parseTextToolCalls(content: string): StreamedToolCall[] {
+  const toolCalls: StreamedToolCall[] = [];
+
+  // Pattern 1: ```tool_request\n{...}\n``` or ```json\n{"name": "...", ...}\n```
+  const codeBlockRegex = /```(?:tool_request|json)?\s*\n?\{[^`]*"name"\s*:\s*"([^"]+)"[^`]*"arguments"\s*:\s*(\{[^`]*\})/gi;
+
+  // Pattern 2: {"name": "tool_name", "arguments": {...}} directly in text
+  const jsonRegex = /\{"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\}/g;
+
+  let match;
+  let id = 0;
+
+  // Try code block pattern first
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    try {
+      const name = match[1];
+      const args = match[2];
+      JSON.parse(args); // Validate JSON
+      toolCalls.push({
+        id: `text-tool-${id++}`,
+        type: 'function',
+        function: { name, arguments: args }
+      });
+    } catch (e) {
+      // Invalid JSON, skip
+    }
+  }
+
+  // If no code blocks found, try direct JSON pattern
+  if (toolCalls.length === 0) {
+    while ((match = jsonRegex.exec(content)) !== null) {
+      try {
+        const name = match[1];
+        const args = match[2];
+        JSON.parse(args); // Validate JSON
+        toolCalls.push({
+          id: `text-tool-${id++}`,
+          type: 'function',
+          function: { name, arguments: args }
+        });
+      } catch (e) {
+        // Invalid JSON, skip
+      }
+    }
+  }
+
+  return toolCalls;
 }
 
 // Shared tool execution

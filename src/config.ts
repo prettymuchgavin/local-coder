@@ -14,6 +14,7 @@ export interface Config {
   dualMode: boolean;
   thinkingModel: string;
   executingModel: string;
+  apiKey: string;
 }
 
 interface ModelInfo {
@@ -32,14 +33,14 @@ const CONFIG_PATH = path.join(process.cwd(), '.local-coder-config.json');
 
 async function fetchAvailableModels(baseURL: string): Promise<ModelInfo[]> {
   const spinner = ora('Fetching available models from LM Studio...').start();
-  
+
   try {
     const response = await fetch(`${baseURL}/models`);
-    
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    
+
     const data = await response.json() as ModelsResponse;
     spinner.succeed('Connected to LM Studio');
     return data.data || [];
@@ -52,28 +53,28 @@ async function fetchAvailableModels(baseURL: string): Promise<ModelInfo[]> {
 export async function selectModel(baseURL: string, purpose?: string): Promise<string> {
   const label = purpose ? ` for ${purpose}` : '';
   console.log(chalk.cyan(`\n🔍 Checking for running models${label}...\n`));
-  
+
   try {
     const models = await fetchAvailableModels(baseURL);
-    
+
     if (models.length === 0) {
       console.log(chalk.yellow('No models currently loaded in LM Studio.'));
       console.log(chalk.dim('Please load a model in LM Studio and try again, or enter a model name manually.\n'));
-      
-      const manualModel = await input({ 
+
+      const manualModel = await input({
         message: `Enter model name${label} (or press Enter for default):`,
         default: 'local-model'
       });
       return manualModel;
     }
-    
+
     if (models.length === 1) {
       console.log(chalk.green(`✓ Found 1 model: ${chalk.bold(models[0].id)}\n`));
       return models[0].id;
     }
-    
+
     console.log(chalk.green(`✓ Found ${models.length} models\n`));
-    
+
     const selectedModel = await select({
       message: purpose ? `Select ${purpose} model:` : 'Select a model to use:',
       choices: models.map(model => ({
@@ -82,14 +83,14 @@ export async function selectModel(baseURL: string, purpose?: string): Promise<st
         description: model.owned_by ? `Owned by: ${model.owned_by}` : undefined
       }))
     });
-    
+
     return selectedModel;
-    
+
   } catch (error: any) {
     console.log(chalk.red(`\n⚠ Could not fetch models: ${error.message}`));
     console.log(chalk.dim('Make sure LM Studio is running and the server is started.\n'));
-    
-    const manualModel = await input({ 
+
+    const manualModel = await input({
       message: `Enter model name${label} manually (or press Enter for default):`,
       default: 'local-model'
     });
@@ -100,21 +101,21 @@ export async function selectModel(baseURL: string, purpose?: string): Promise<st
 export async function selectDualModels(baseURL: string): Promise<{ thinking: string; executing: string }> {
   console.log(chalk.cyan('\n🧠 Dual-Model Mode'));
   console.log(chalk.dim('Select models for thinking (planning) and executing (coding)\n'));
-  
+
   try {
     const models = await fetchAvailableModels(baseURL);
-    
+
     if (models.length === 0) {
       console.log(chalk.yellow('No models found. Using default for both.\n'));
       return { thinking: 'local-model', executing: 'local-model' };
     }
-    
+
     // Ask if user wants to use same model for both
     const useSameModel = await confirm({
       message: 'Use the same model for both thinking and executing?',
       default: models.length === 1
     });
-    
+
     if (useSameModel) {
       let model: string;
       if (models.length === 1) {
@@ -128,34 +129,34 @@ export async function selectDualModels(baseURL: string): Promise<{ thinking: str
       }
       return { thinking: model, executing: model };
     }
-    
+
     // Select thinking model
     console.log(chalk.magenta('\n📊 Thinking Model') + chalk.dim(' (for planning and reasoning)'));
     const thinkingModel = await select({
       message: 'Select thinking model:',
-      choices: models.map(m => ({ 
-        name: m.id, 
+      choices: models.map(m => ({
+        name: m.id,
         value: m.id,
         description: 'Analyzes problems and creates plans'
       }))
     });
-    
+
     // Select executing model
     console.log(chalk.cyan('\n⚡ Executing Model') + chalk.dim(' (for coding and tools)'));
     const executingModel = await select({
       message: 'Select executing model:',
-      choices: models.map(m => ({ 
-        name: m.id, 
+      choices: models.map(m => ({
+        name: m.id,
         value: m.id,
         description: 'Writes code and runs commands'
       }))
     });
-    
+
     console.log(chalk.green(`\n✓ Thinking: ${chalk.bold(thinkingModel)}`));
     console.log(chalk.green(`✓ Executing: ${chalk.bold(executingModel)}\n`));
-    
+
     return { thinking: thinkingModel, executing: executingModel };
-    
+
   } catch (error: any) {
     console.log(chalk.red(`\n⚠ Could not fetch models: ${error.message}`));
     return { thinking: 'local-model', executing: 'local-model' };
@@ -169,6 +170,7 @@ export async function loadConfig(dualMode: boolean = false): Promise<Config> {
     dualMode: dualMode,
     thinkingModel: 'local-model',
     executingModel: 'local-model',
+    apiKey: 'lm-studio', // Default for local LM Studio
   };
 
   if (fs.existsSync(CONFIG_PATH)) {
@@ -180,11 +182,13 @@ export async function loadConfig(dualMode: boolean = false): Promise<Config> {
     }
   }
 
-  // Allow env vars to override base URL
+  // Allow env vars to override
   if (process.env.LOCAL_LLM_BASE_URL) config.baseURL = process.env.LOCAL_LLM_BASE_URL;
-  
+  if (process.env.OPENAI_API_KEY) config.apiKey = process.env.OPENAI_API_KEY;
+  if (process.env.LOCAL_LLM_API_KEY) config.apiKey = process.env.LOCAL_LLM_API_KEY;
+
   config.dualMode = dualMode;
-  
+
   if (dualMode) {
     // Select dual models
     const models = await selectDualModels(config.baseURL);
@@ -208,6 +212,6 @@ export async function loadConfig(dualMode: boolean = false): Promise<Config> {
 export function createClient(config: Config): OpenAI {
   return new OpenAI({
     baseURL: config.baseURL,
-    apiKey: 'lm-studio', // Arbitrary for local servers
+    apiKey: config.apiKey,
   });
 }

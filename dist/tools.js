@@ -117,9 +117,20 @@ exports.toolsDefinition = [
         },
     },
 ];
+// Security: Validate path to prevent directory traversal
+function validatePath(inputPath) {
+    const resolved = path.resolve(inputPath);
+    const cwd = process.cwd();
+    // Allow paths within cwd or absolute paths that exist
+    if (resolved.startsWith(cwd) || path.isAbsolute(inputPath)) {
+        return resolved;
+    }
+    throw new Error(`Invalid path: "${inputPath}" - must be within current directory or absolute`);
+}
 async function listFiles(dirPath = '.') {
     try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
+        const safePath = validatePath(dirPath);
+        const entries = await fs.readdir(safePath, { withFileTypes: true });
         const formatted = entries
             .map((entry) => {
             const type = entry.isDirectory() ? '[DIR]' : '[FILE]';
@@ -134,7 +145,8 @@ async function listFiles(dirPath = '.') {
 }
 async function readFile(filePath) {
     try {
-        const content = await fs.readFile(filePath, 'utf-8');
+        const safePath = validatePath(filePath);
+        const content = await fs.readFile(safePath, 'utf-8');
         return content;
     }
     catch (error) {
@@ -143,17 +155,35 @@ async function readFile(filePath) {
 }
 async function writeFile(filePath, content) {
     try {
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content, 'utf-8');
-        return `Successfully wrote to ${filePath}`;
+        const safePath = validatePath(filePath);
+        await fs.mkdir(path.dirname(safePath), { recursive: true });
+        await fs.writeFile(safePath, content, 'utf-8');
+        return `Successfully wrote to ${safePath}`;
     }
     catch (error) {
         return `Error writing file: ${error.message}`;
     }
 }
+// Timeout wrapper for shell commands
+function execWithTimeout(command, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+        const child = (0, child_process_1.exec)(command, { timeout: timeoutMs }, (error, stdout, stderr) => {
+            if (error) {
+                reject({ ...error, stdout, stderr });
+            }
+            else {
+                resolve({ stdout, stderr });
+            }
+        });
+        // Ensure child process is killed on timeout
+        setTimeout(() => {
+            child.kill('SIGTERM');
+        }, timeoutMs);
+    });
+}
 async function runShellCommand(command) {
     try {
-        const { stdout, stderr } = await execAsync(command);
+        const { stdout, stderr } = await execWithTimeout(command, 30000);
         let output = '';
         if (stdout)
             output += `STDOUT:\n${stdout}\n`;
@@ -162,6 +192,9 @@ async function runShellCommand(command) {
         return output || '(Command completed with no output)';
     }
     catch (error) {
+        if (error.killed) {
+            return `Error: Command timed out after 30 seconds`;
+        }
         return `Error executing command: ${error.message}\nSTDERR:\n${error.stderr || ''}`;
     }
 }

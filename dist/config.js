@@ -168,6 +168,7 @@ async function loadConfig(dualMode = false) {
         dualMode: dualMode,
         thinkingModel: 'local-model',
         executingModel: 'local-model',
+        apiKey: 'lm-studio', // Default for local LM Studio
     };
     if (fs_1.default.existsSync(CONFIG_PATH)) {
         try {
@@ -178,9 +179,13 @@ async function loadConfig(dualMode = false) {
             // Ignore error
         }
     }
-    // Allow env vars to override base URL
+    // Allow env vars to override
     if (process.env.LOCAL_LLM_BASE_URL)
         config.baseURL = process.env.LOCAL_LLM_BASE_URL;
+    if (process.env.OPENAI_API_KEY)
+        config.apiKey = process.env.OPENAI_API_KEY;
+    if (process.env.LOCAL_LLM_API_KEY)
+        config.apiKey = process.env.LOCAL_LLM_API_KEY;
     config.dualMode = dualMode;
     if (dualMode) {
         // Select dual models
@@ -205,6 +210,6 @@ async function loadConfig(dualMode = false) {
 function createClient(config) {
     return new openai_1.default({
         baseURL: config.baseURL,
-        apiKey: 'lm-studio', // Arbitrary for local servers
+        apiKey: config.apiKey,
     });
 }
