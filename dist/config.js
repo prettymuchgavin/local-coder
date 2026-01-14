@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.selectModel = selectModel;
+exports.selectDualModels = selectDualModels;
 exports.loadConfig = loadConfig;
 exports.createClient = createClient;
 const openai_1 = __importDefault(require("openai"));
@@ -64,15 +65,16 @@ async function fetchAvailableModels(baseURL) {
         throw error;
     }
 }
-async function selectModel(baseURL) {
-    console.log(chalk_1.default.cyan('\n🔍 Checking for running models in LM Studio...\n'));
+async function selectModel(baseURL, purpose) {
+    const label = purpose ? ` for ${purpose}` : '';
+    console.log(chalk_1.default.cyan(`\n🔍 Checking for running models${label}...\n`));
     try {
         const models = await fetchAvailableModels(baseURL);
         if (models.length === 0) {
             console.log(chalk_1.default.yellow('No models currently loaded in LM Studio.'));
             console.log(chalk_1.default.dim('Please load a model in LM Studio and try again, or enter a model name manually.\n'));
             const manualModel = await (0, prompts_1.input)({
-                message: 'Enter model name (or press Enter for default):',
+                message: `Enter model name${label} (or press Enter for default):`,
                 default: 'local-model'
             });
             return manualModel;
@@ -83,7 +85,7 @@ async function selectModel(baseURL) {
         }
         console.log(chalk_1.default.green(`✓ Found ${models.length} models\n`));
         const selectedModel = await (0, prompts_1.select)({
-            message: 'Select a model to use:',
+            message: purpose ? `Select ${purpose} model:` : 'Select a model to use:',
             choices: models.map(model => ({
                 name: model.id,
                 value: model.id,
@@ -96,16 +98,76 @@ async function selectModel(baseURL) {
         console.log(chalk_1.default.red(`\n⚠ Could not fetch models: ${error.message}`));
         console.log(chalk_1.default.dim('Make sure LM Studio is running and the server is started.\n'));
         const manualModel = await (0, prompts_1.input)({
-            message: 'Enter model name manually (or press Enter for default):',
+            message: `Enter model name${label} manually (or press Enter for default):`,
             default: 'local-model'
         });
         return manualModel;
     }
 }
-async function loadConfig() {
+async function selectDualModels(baseURL) {
+    console.log(chalk_1.default.cyan('\n🧠 Dual-Model Mode'));
+    console.log(chalk_1.default.dim('Select models for thinking (planning) and executing (coding)\n'));
+    try {
+        const models = await fetchAvailableModels(baseURL);
+        if (models.length === 0) {
+            console.log(chalk_1.default.yellow('No models found. Using default for both.\n'));
+            return { thinking: 'local-model', executing: 'local-model' };
+        }
+        // Ask if user wants to use same model for both
+        const useSameModel = await (0, prompts_1.confirm)({
+            message: 'Use the same model for both thinking and executing?',
+            default: models.length === 1
+        });
+        if (useSameModel) {
+            let model;
+            if (models.length === 1) {
+                model = models[0].id;
+                console.log(chalk_1.default.green(`✓ Using ${chalk_1.default.bold(model)} for both roles\n`));
+            }
+            else {
+                model = await (0, prompts_1.select)({
+                    message: 'Select model for both thinking and executing:',
+                    choices: models.map(m => ({ name: m.id, value: m.id }))
+                });
+            }
+            return { thinking: model, executing: model };
+        }
+        // Select thinking model
+        console.log(chalk_1.default.magenta('\n📊 Thinking Model') + chalk_1.default.dim(' (for planning and reasoning)'));
+        const thinkingModel = await (0, prompts_1.select)({
+            message: 'Select thinking model:',
+            choices: models.map(m => ({
+                name: m.id,
+                value: m.id,
+                description: 'Analyzes problems and creates plans'
+            }))
+        });
+        // Select executing model
+        console.log(chalk_1.default.cyan('\n⚡ Executing Model') + chalk_1.default.dim(' (for coding and tools)'));
+        const executingModel = await (0, prompts_1.select)({
+            message: 'Select executing model:',
+            choices: models.map(m => ({
+                name: m.id,
+                value: m.id,
+                description: 'Writes code and runs commands'
+            }))
+        });
+        console.log(chalk_1.default.green(`\n✓ Thinking: ${chalk_1.default.bold(thinkingModel)}`));
+        console.log(chalk_1.default.green(`✓ Executing: ${chalk_1.default.bold(executingModel)}\n`));
+        return { thinking: thinkingModel, executing: executingModel };
+    }
+    catch (error) {
+        console.log(chalk_1.default.red(`\n⚠ Could not fetch models: ${error.message}`));
+        return { thinking: 'local-model', executing: 'local-model' };
+    }
+}
+async function loadConfig(dualMode = false) {
     let config = {
         baseURL: 'http://localhost:1234/v1',
         model: 'local-model',
+        dualMode: dualMode,
+        thinkingModel: 'local-model',
+        executingModel: 'local-model',
     };
     if (fs_1.default.existsSync(CONFIG_PATH)) {
         try {
@@ -119,12 +181,24 @@ async function loadConfig() {
     // Allow env vars to override base URL
     if (process.env.LOCAL_LLM_BASE_URL)
         config.baseURL = process.env.LOCAL_LLM_BASE_URL;
-    // Select model from LM Studio (skip if env var is set)
-    if (process.env.LOCAL_LLM_MODEL) {
-        config.model = process.env.LOCAL_LLM_MODEL;
+    config.dualMode = dualMode;
+    if (dualMode) {
+        // Select dual models
+        const models = await selectDualModels(config.baseURL);
+        config.thinkingModel = models.thinking;
+        config.executingModel = models.executing;
+        config.model = models.executing; // Default model is executing model
     }
     else {
-        config.model = await selectModel(config.baseURL);
+        // Single model mode
+        if (process.env.LOCAL_LLM_MODEL) {
+            config.model = process.env.LOCAL_LLM_MODEL;
+        }
+        else {
+            config.model = await selectModel(config.baseURL);
+        }
+        config.thinkingModel = config.model;
+        config.executingModel = config.model;
     }
     return config;
 }

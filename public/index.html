@@ -561,6 +561,147 @@
     ::-webkit-scrollbar-thumb:hover {
       background: var(--text-muted);
     }
+
+    /* Dual Mode Toggle */
+    .dual-mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+      border: 1px solid var(--border-color);
+    }
+
+    .toggle-switch.active {
+      background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan));
+      border-color: transparent;
+    }
+
+    .toggle-switch::before {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s;
+    }
+
+    .toggle-switch.active::before {
+      transform: translateX(20px);
+    }
+
+    .dual-selectors {
+      display: none;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .dual-selectors.visible {
+      display: flex;
+    }
+
+    .dual-selectors select {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 0.375rem 0.5rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      min-width: 120px;
+    }
+
+    .dual-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    /* Thinking Phase Box */
+    .thinking-phase {
+      background: var(--bg-secondary);
+      border: 1px solid var(--accent-purple);
+      border-radius: 8px;
+      margin: 0.75rem 0 0.75rem 2.25rem;
+      overflow: hidden;
+    }
+
+    .thinking-header {
+      background: rgba(163, 113, 247, 0.1);
+      padding: 0.75rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+      border-bottom: 1px solid var(--accent-purple);
+    }
+
+    .thinking-header:hover {
+      background: rgba(163, 113, 247, 0.15);
+    }
+
+    .thinking-toggle {
+      color: var(--accent-purple);
+      transition: transform 0.2s;
+    }
+
+    .thinking-phase.collapsed .thinking-toggle {
+      transform: rotate(-90deg);
+    }
+
+    .thinking-title {
+      color: var(--accent-purple);
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .thinking-model {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .thinking-body {
+      max-height: 300px;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .thinking-phase.collapsed .thinking-body {
+      max-height: 0;
+    }
+
+    .thinking-content {
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+
+    /* Executing Phase Indicator */
+    .phase-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0;
+      margin-left: 2.25rem;
+      color: var(--accent-cyan);
+      font-size: 0.875rem;
+    }
+
+    .phase-indicator.thinking {
+      color: var(--accent-purple);
+    }
   </style>
 </head>
 
@@ -571,12 +712,29 @@
       <span class="logo-text">LOCAL CODER</span>
     </div>
     <div class="header-controls">
-      <div class="model-selector">
+      <div class="dual-mode-toggle">
+        <span style="font-size: 0.75rem; color: var(--text-muted);">Dual</span>
+        <div class="toggle-switch" id="dual-toggle" title="Toggle dual-model mode (thinking + executing)"></div>
+      </div>
+
+      <div class="model-selector" id="single-model-selector">
         <label for="model-select">Model:</label>
         <select id="model-select">
-          <option value="">Loading models...</option>
+          <option value="">Loading...</option>
         </select>
       </div>
+
+      <div class="dual-selectors" id="dual-selectors">
+        <span class="dual-label">🧠</span>
+        <select id="thinking-model-select" title="Thinking model">
+          <option value="">Thinking...</option>
+        </select>
+        <span class="dual-label">⚡</span>
+        <select id="executing-model-select" title="Executing model">
+          <option value="">Executing...</option>
+        </select>
+      </div>
+
       <button class="btn" id="clear-btn" title="Clear conversation">
         🗑️ Clear
       </button>
@@ -631,8 +789,18 @@
     const modelInfo = document.getElementById('model-info');
     const welcome = document.getElementById('welcome');
 
+    // Dual mode elements
+    const dualToggle = document.getElementById('dual-toggle');
+    const singleModelSelector = document.getElementById('single-model-selector');
+    const dualSelectors = document.getElementById('dual-selectors');
+    const thinkingModelSelect = document.getElementById('thinking-model-select');
+    const executingModelSelect = document.getElementById('executing-model-select');
+
     let isStreaming = false;
     let currentModel = '';
+    let dualMode = false;
+    let thinkingModel = '';
+    let executingModel = '';
 
     // Initialize
     async function init() {
@@ -647,19 +815,15 @@
         const response = await fetch('/api/models');
         const data = await response.json();
 
-        modelSelect.innerHTML = '';
-        if (data.data && data.data.length > 0) {
-          data.data.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = model.id;
-            modelSelect.appendChild(option);
-          });
-          setConnected(true);
-        } else {
-          modelSelect.innerHTML = '<option value="">No models loaded</option>';
-          setConnected(false);
-        }
+        const options = data.data && data.data.length > 0
+          ? data.data.map(m => `<option value="${m.id}">${m.id}</option>`).join('')
+          : '<option value="">No models</option>';
+
+        modelSelect.innerHTML = options;
+        thinkingModelSelect.innerHTML = options;
+        executingModelSelect.innerHTML = options;
+
+        setConnected(data.data && data.data.length > 0);
       } catch (error) {
         console.error('Failed to load models:', error);
         modelSelect.innerHTML = '<option value="">Connection failed</option>';
@@ -674,9 +838,32 @@
         const config = await response.json();
         currentModel = config.model;
         modelSelect.value = config.model;
-        modelInfo.textContent = `Model: ${config.model}`;
+
+        dualMode = config.dualMode || false;
+        thinkingModel = config.thinkingModel || config.model;
+        executingModel = config.executingModel || config.model;
+
+        thinkingModelSelect.value = thinkingModel;
+        executingModelSelect.value = executingModel;
+
+        updateDualModeUI();
+        updateModelInfo();
       } catch (error) {
         console.error('Failed to load config:', error);
+      }
+    }
+
+    function updateDualModeUI() {
+      dualToggle.classList.toggle('active', dualMode);
+      singleModelSelector.style.display = dualMode ? 'none' : 'flex';
+      dualSelectors.classList.toggle('visible', dualMode);
+    }
+
+    function updateModelInfo() {
+      if (dualMode) {
+        modelInfo.textContent = `🧠 ${thinkingModel.substring(0, 20)} | ⚡ ${executingModel.substring(0, 20)}`;
+      } else {
+        modelInfo.textContent = `Model: ${currentModel}`;
       }
     }
 
@@ -702,6 +889,7 @@
         messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
       });
 
+      // Single model change
       modelSelect.addEventListener('change', async () => {
         const model = modelSelect.value;
         if (model) {
@@ -711,8 +899,46 @@
             body: JSON.stringify({ model })
           });
           currentModel = model;
-          modelInfo.textContent = `Model: ${model}`;
+          updateModelInfo();
         }
+      });
+
+      // Dual mode toggle
+      dualToggle.addEventListener('click', async () => {
+        dualMode = !dualMode;
+        updateDualModeUI();
+
+        await fetch('/api/config/dual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: dualMode,
+            thinkingModel: thinkingModelSelect.value,
+            executingModel: executingModelSelect.value
+          })
+        });
+        updateModelInfo();
+      });
+
+      // Dual model selectors
+      thinkingModelSelect.addEventListener('change', async () => {
+        thinkingModel = thinkingModelSelect.value;
+        await fetch('/api/config/dual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: dualMode, thinkingModel, executingModel })
+        });
+        updateModelInfo();
+      });
+
+      executingModelSelect.addEventListener('change', async () => {
+        executingModel = executingModelSelect.value;
+        await fetch('/api/config/dual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: dualMode, thinkingModel, executingModel })
+        });
+        updateModelInfo();
       });
 
       clearBtn.addEventListener('click', async () => {
@@ -742,7 +968,6 @@
       const message = messageInput.value.trim();
       if (!message || isStreaming) return;
 
-      // Hide welcome, add user message
       welcome?.remove();
       addMessage('user', message);
       messageInput.value = '';
@@ -751,24 +976,24 @@
       isStreaming = true;
       sendBtn.disabled = true;
 
-      // Create assistant message container
       const assistantMsg = addMessage('assistant', '');
       const contentDiv = assistantMsg.querySelector('.message-content');
-
-      // Add typing indicator
       contentDiv.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+
+      let thinkingBox = null;
+      let thinkingContent = '';
+      let hasExecutingContent = false;
 
       try {
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, autoApprove: true })
+          body: JSON.stringify({ message, autoApprove: true, dualMode })
         });
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let hasContent = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -782,15 +1007,38 @@
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
-                handleStreamEvent(data, contentDiv, assistantMsg, hasContent);
-                if (data.type === 'content') hasContent = true;
+
+                // Handle dual-mode specific events
+                if (data.type === 'phase_start' && data.phase === 'enhancing') {
+                  contentDiv.innerHTML = '';
+                  thinkingBox = createEnhancingBox(data.model);
+                  assistantMsg.appendChild(thinkingBox);
+                } else if (data.type === 'enhancing_content') {
+                  thinkingContent += data.text;
+                  const enhancingContentEl = thinkingBox?.querySelector('.thinking-content');
+                  if (enhancingContentEl) {
+                    enhancingContentEl.textContent = thinkingContent;
+                  }
+                } else if (data.type === 'phase_end' && data.phase === 'enhancing') {
+                  // Collapse by default
+                  if (thinkingBox) {
+                    thinkingBox.classList.add('collapsed');
+                  }
+                } else if (data.type === 'phase_start' && data.phase === 'executing') {
+                  // Clear the typing indicator for executing phase
+                  contentDiv.innerHTML = '';
+                } else {
+                  // Handle regular events
+                  handleStreamEvent(data, contentDiv, assistantMsg, hasExecutingContent);
+                  if (data.type === 'content') hasExecutingContent = true;
+                }
               } catch (e) { }
             }
           }
         }
 
-        if (!hasContent && contentDiv.querySelector('.typing-indicator')) {
-          contentDiv.innerHTML = '<span style="color: var(--text-muted)">No response from model</span>';
+        if (!hasExecutingContent && contentDiv.querySelector('.typing-indicator')) {
+          contentDiv.innerHTML = dualMode ? '' : '<span style="color: var(--text-muted)">No response</span>';
         }
 
       } catch (error) {
@@ -802,13 +1050,31 @@
       scrollToBottom();
     }
 
+    function createEnhancingBox(model) {
+      const box = document.createElement('div');
+      box.className = 'thinking-phase';
+      box.innerHTML = `
+        <div class="thinking-header" onclick="toggleThinkingBox(this.parentElement)">
+          <span class="thinking-toggle">▼</span>
+          <span class="thinking-title">✨ Enhanced Prompt</span>
+          <span class="thinking-model">${model || ''}</span>
+        </div>
+        <div class="thinking-body">
+          <div class="thinking-content"></div>
+        </div>
+      `;
+      return box;
+    }
+
+    function toggleThinkingBox(box) {
+      box.classList.toggle('collapsed');
+    }
+
     // Handle stream events
     function handleStreamEvent(data, contentDiv, assistantMsg, hasContent) {
       switch (data.type) {
         case 'content':
-          if (!hasContent) {
-            contentDiv.innerHTML = '';
-          }
+          if (!hasContent) contentDiv.innerHTML = '';
           contentDiv.textContent += data.text;
           break;
 
@@ -839,8 +1105,7 @@
           if (lastTool) {
             lastTool.querySelector('.tool-status').className = 'tool-status success';
             lastTool.querySelector('.tool-status').textContent = '✓ Done';
-            lastTool.querySelector('.tool-result').textContent = data.result || 'Completed successfully';
-            // Auto-collapse on success after a short delay
+            lastTool.querySelector('.tool-result').textContent = data.result || 'Done';
             setTimeout(() => {
               if (!lastTool.classList.contains('user-expanded')) {
                 lastTool.classList.add('collapsed');
@@ -866,7 +1131,6 @@
       scrollToBottom();
     }
 
-    // Add message to chat
     function addMessage(role, content) {
       const div = document.createElement('div');
       div.className = `message ${role}`;
@@ -892,33 +1156,25 @@
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    // Toggle tool call expansion
     function toggleToolCall(toolEl) {
       toolEl.classList.toggle('collapsed');
-      // Mark as user-expanded so it doesn't auto-collapse
       if (!toolEl.classList.contains('collapsed')) {
         toolEl.classList.add('user-expanded');
       }
     }
 
-    // Get a short summary of tool arguments for the header
     function getArgsSummary(toolName, args) {
       switch (toolName) {
-        case 'write_file':
-          return args.file_path ? `→ ${args.file_path}` : '';
-        case 'read_file':
-          return args.file_path ? `← ${args.file_path}` : '';
-        case 'list_files':
-          return args.dir_path ? `📁 ${args.dir_path}` : '📁 .';
+        case 'write_file': return args.file_path ? `→ ${args.file_path}` : '';
+        case 'read_file': return args.file_path ? `← ${args.file_path}` : '';
+        case 'list_files': return args.dir_path ? `📁 ${args.dir_path}` : '📁 .';
         case 'run_shell_command':
           const cmd = args.command || '';
           return cmd.length > 40 ? `$ ${cmd.substring(0, 40)}...` : `$ ${cmd}`;
-        default:
-          return '';
+        default: return '';
       }
     }
 
-    // Initialize
     init();
   </script>
 </body>

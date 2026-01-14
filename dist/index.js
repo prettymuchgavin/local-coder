@@ -15,10 +15,11 @@ program
     .description('A CLI AI coding assistant using local LLMs')
     .version('1.0.0')
     .option('-g, --gui', 'Start the web-based GUI instead of CLI')
-    .option('-p, --port <number>', 'Port for the web GUI (default: 3000)', '3000');
+    .option('-p, --port <number>', 'Port for the web GUI (default: 3000)', '3000')
+    .option('-d, --dual', 'Enable dual-model mode (thinking + executing)');
 program.action(async (options) => {
     try {
-        const config = await (0, config_1.loadConfig)();
+        const config = await (0, config_1.loadConfig)(options.dual || false);
         if (options.gui) {
             // Start web server
             process.env.PORT = options.port;
